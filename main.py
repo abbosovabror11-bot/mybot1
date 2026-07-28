@@ -102,6 +102,36 @@ def start_command(message):
     username = message.from_user.username
     args = message.text.split()
     
+    conn = sqlite3.connect('ref_bot_database.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+    user = cursor.fetchone()
+    
+    # Agar foydalanuvchi birinchi marta kirayotgan bo'lsa
+    if not user:
+        invited_by = None
+        if len(args) > 1 and args[1].isdigit():
+            ref_id = int(args[1])
+            if ref_id != user_id:
+                cursor.execute('SELECT * FROM users WHERE user_id = ?', (ref_id,))
+                if cursor.fetchone():
+                    invited_by = ref_id
+                    # Taklif qilgan odamning referallar sonini va balansini oshiramiz
+                    cursor.execute('UPDATE users SET balance = balance + ?, referrals_count = referrals_count + 1 WHERE user_id = ?', (REF_BONUS, ref_id))
+                    conn.commit()
+                    try:
+                        bot.send_message(ref_id, f"🔥 **Tabriklaymiz!** Sizning havolangiz orqali yangi do'stingiz qo'shildi va balansingizga `+{REF_BONUS}` ball qo'shildi! 🎁", parse_mode="Markdown")
+                    except:
+                        pass
+
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute('INSERT INTO users (user_id, username, invited_by, joined_date) VALUES (?, ?, ?, ?)', (user_id, username, invited_by, current_date))
+        conn.commit()
+    
+    conn.close()
+
+    # Kanallarga obuna tekshiruvi
     not_subbed = check_subscriptions(user_id)
     if not_subbed:
         markup = types.InlineKeyboardMarkup()
@@ -119,32 +149,6 @@ def start_command(message):
         )
         return
 
-    conn = sqlite3.connect('ref_bot_database.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-    user = cursor.fetchone()
-    
-    if not user:
-        invited_by = None
-        if len(args) > 1 and args[1].isdigit():
-            ref_id = int(args[1])
-            if ref_id != user_id:
-                cursor.execute('SELECT * FROM users WHERE user_id = ?', (ref_id,))
-                if cursor.fetchone():
-                    invited_by = ref_id
-                    cursor.execute('UPDATE users SET balance = balance + ?, referrals_count = referrals_count + 1 WHERE user_id = ?', (REF_BONUS, ref_id))
-                    conn.commit()
-                    try:
-                        bot.send_message(ref_id, f"🔥 **Tabriklaymiz!** Sizning havolangiz orqali yangi do'stingiz qo'shildi va balansingizga `+{REF_BONUS}` ball qo'shildi! 🎁", parse_mode="Markdown")
-                    except:
-                        pass
-
-        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute('INSERT INTO users (user_id, username, invited_by, joined_date) VALUES (?, ?, ?, ?)', (user_id, username, invited_by, current_date))
-        conn.commit()
-        
-    conn.close()
     send_main_menu(user_id, user_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_sub")
@@ -162,15 +166,6 @@ def callback_check_sub(call):
             bot.delete_message(call.message.chat.id, call.message.message.id)
         except:
             pass
-        
-        conn = sqlite3.connect('ref_bot_database.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        if not cursor.fetchone():
-            current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute('INSERT INTO users (user_id, username, joined_date) VALUES (?, ?, ?)', (user_id, call.from_user.username, current_date))
-            conn.commit()
-        conn.close()
         
         bot.send_message(user_id, "✅ **Obunangiz muvaffaqiyatli tasdiqlandi!** 🎉", parse_mode="Markdown")
         send_main_menu(user_id, user_id)
@@ -205,6 +200,8 @@ def handle_messages(message):
         if res:
             balance, ref_count = res
             bot.send_message(user_id, f"👤 **Sizning statistikangiz:**\n\n🆔 ID: `{user_id}`\n💰 Ballar: `{balance}`\n👥 Referallar: `{ref_count}` ta", parse_mode="Markdown")
+        else:
+            bot.send_message(user_id, "Siz hali ro'yxatdan o'tmagansiz. /start buyrug'ini bosing.")
             
     elif text == "🏆 TOP-10 Referallar":
         conn = sqlite3.connect('ref_bot_database.db', check_same_thread=False)
@@ -216,8 +213,8 @@ def handle_messages(message):
         msg = "🏆 **Eng faol referal yig'uvchilar (TOP-10):**\n\n"
         for i, u in enumerate(top_users, 1):
             uname = f"@{u[0]}" if u[0] else "Noma'lum"
-            msg += f"{i}. {uname} — **{u[1]}** ta\n"
-        bot.send_message(user_id, msg, parse_mode="Markdown")
+            msg += f"{i}. {uname} — {u[1]} ta\n"
+        bot.send_message(user_id, msg)
 
     elif text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -296,15 +293,15 @@ def inspect_user(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('top_filter_'))
 def callback_top_filter(call):
     days = int(call.data.split('_')[2])
-    conn = sqlite3.connect('ref_dev_database.db' if False else 'ref_bot_database.db', check_same_thread=False)
+    conn = sqlite3.connect('ref_bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('SELECT username, referrals_count FROM users ORDER BY referrals_count DESC LIMIT 10')
     top_users = cursor.fetchall()
     conn.close()
     msg = f"🏆 **TOP-10 ({days} kun):**\n\n"
     for i, u in enumerate(top_users, 1):
-        msg += f"{i}. @{u[0]} — {u[1]}\n"
-    bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
+        msg += f"{i}. @{u[0]} — {u[1]} ta\n"
+    bot.send_message(ADMIN_ID, msg)
 
 def save_channel(message):
     if message.from_user.id != ADMIN_ID:
@@ -343,6 +340,6 @@ def broadcast_message(message):
 
 # ==================== BOTNI ISHGA TUSHIRISH ====================
 if __name__ == '__main__':
-    keep_alive()  # Serverni uyg'oq saqlash uchun web-serverni yoqamiz
+    keep_alive()
     print("Bot va veb-server ishga tushdi...")
     bot.infinity_polling()
